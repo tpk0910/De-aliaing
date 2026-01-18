@@ -1,0 +1,557 @@
+%% signal1d.m
+% 1D demo for dual-rate de-aliasing (paper reproduction scaffold)
+% Current scope: General-n Step 4 + Step 5-7 (spectrum symmetry, inverse CTFT, correlation).
+%
+% Figures produced (default):
+%   Fig-1  Time-domain: (a) fs1, (b) fs2, (c) fN, (d) original, (e) comparison
+%   Fig-2  Spectra: (a) original, (b) fs1, (c) fs2, (d) fN
+%   Fig-3  Step2 aligned spectra on common axis within [-fH, fH] (LPF applied)
+%   Fig-4  Step3 positive-frequency sections visualization
+%   Fig-5  Step4A section-1 alias extraction (NO shifting)
+%   Fig-6  Step4B alias shifting (section1 -> section2)
+%   Fig-7  Step4C update X1 over [0,fH]
+%   Fig-8  Step4C zoom: last-section cleaning (general n)
+%   Fig-9  Step5-7 time-domain de-aliased result + comparison
+%   Fig-10 Step5-7 spectrum overlay
+%
+% Notes:
+% - If you see (a) fs1 almost flat, it's expected when sampling hits sin zeros.
+%   For fc=2 Hz and fs1≈4 Hz, samples occur at t=k/4, sin(2π*2*k/4)=sin(πk)=0.
+%   If you want a non-trivial fs1 time plot, add a small time offset to t1.
+%
+% Author: cleaned/organized version
+
+clear; close all; clc;
+
+%% ===================== Plot flags =====================
+PLOT_TIME      = true;
+PLOT_SPECTRA4  = true;
+PLOT_STEP2     = true;
+PLOT_STEP3     = true;
+PLOT_STEP4A    = true;
+PLOT_STEP4B    = true;
+PLOT_STEP4C    = true;
+PLOT_STEP4C_Z  = true;
+
+PLOT_STEP4_ITER = false;   % per-iteration debug plots (general n)
+
+PLOT_RECON_TIME = true;    % Step 5-7: time-domain de-aliased result + comparison
+PLOT_RECON_SPEC = true;    % Step 5-7: spectrum overlay
+
+%% ===================== 0) Parameters =====================
+A     = 1;
+mu    = 0;
+sigma = 1;
+fc    = 2;        % Hz
+fH    = 2.67;     % Hz (estimated highest frequency)
+
+fN  = 2*fH;       % Nyquist rate
+fs2 = fH;         % paper setting
+n   = 2;          % number of sections in [0,fH]
+fs1 = (n+1)/n * fH;
+
+T = 1.5;          % sec, time range for plots/sampling
+
+% Time plotting smoothness
+show_samples = true;
+N_fine_time  = 5000;
+xlim_time    = [-1.5, 1.5];
+ylim_time    = [-2.5, 2.0];
+
+% Spectrum display (Fig-2)
+Nfft_spec = 65536;
+f_lim    = 12;          % Hz (display only)
+use_window_for_spec = true;  % reduce leakage (Fig-2 only)
+
+% Step-2/4 frequency alignment
+Nfft_align = 65536;
+K_common   = 4096;
+use_window_align = false;    % keep false for amplitude interpretation
+
+%% ===================== 1) Signal definition =====================
+g = @(t) A .* exp(-((t-mu).^2)./(2*sigma^2)) .* sin(2*pi*fc.*t);
+
+% "Original" continuous signal (high-resolution)
+t0 = linspace(-T, T, 20000);
+x0 = g(t0);
+
+% Sampled signals
+% Optional: if you want fs1 not to land on sin zeros, uncomment offset:
+% t1 = (-T : 1/fs1 : T) + (0.5/fs1);
+
+tN = -T : 1/fN  : T;   xN = g(tN);
+t1 = -T : 1/fs1 : T;   x1 = g(t1);
+t2 = -T : 1/fs2 : T;   x2 = g(t2);
+% fprintf('fH=%.15f, fs1=%.15f, fs2=%.15f\n', fH, fs1, fs2);
+
+
+%% ===================== Fig-1: time-domain =====================
+if PLOT_TIME
+    figure('Color','w','Name','1D Signal Sampling (with Original)');
+    tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
+
+    % (a) fs1
+    nexttile(1);
+    plot_smooth(t1, x1, '(a) sampled with f_{s1}', N_fine_time, show_samples, xlim_time, ylim_time);
+
+    % (b) fs2
+    nexttile(2);
+    plot_smooth(t2, x2, '(b) sampled with f_{s2}', N_fine_time, show_samples, xlim_time, ylim_time);
+
+    % (c) fN
+    nexttile(4);
+    plot_smooth(tN, xN, '(c) sampled with f_N', N_fine_time, show_samples, xlim_time, ylim_time);
+
+    % (d) original
+    nexttile(5);
+    plot(t0, x0, 'LineWidth', 1.2);
+    grid on; xlabel('t'); ylabel('x(t)');
+    title('(d) original signal');
+    xlim(xlim_time); ylim(ylim_time);
+
+    % (e) comparison
+    axE = nexttile(3,[2 1]);
+    hold(axE,'on'); grid(axE,'on');
+    xlabel(axE,'t'); ylabel(axE,'x(t)');
+    title(axE,'(e) comparison');
+    xlim(axE, xlim_time); ylim(axE, ylim_time);
+
+    [tF0, xF0] = smooth_curve(t0, x0, N_fine_time);
+    [tFN, xFN] = smooth_curve(tN, xN, N_fine_time);
+    [tF1, xF1] = smooth_curve(t1, x1, N_fine_time);
+    [tF2, xF2] = smooth_curve(t2, x2, N_fine_time);
+
+    p0 = plot(axE, tF0, xF0, 'k',  'LineWidth', 1.5);
+    pN = plot(axE, tFN, xFN, '-',  'LineWidth', 1.2);
+    p1 = plot(axE, tF1, xF1, '--', 'LineWidth', 1.2);
+    p2 = plot(axE, tF2, xF2, ':',  'LineWidth', 1.6);
+
+    legend(axE, [p0 pN p1 p2], {'original','f_N','f_{s1}','f_{s2}'}, 'Location','northeast');
+end
+
+%% ===================== Fig-2: spectra (4 subplots) =====================
+if PLOT_SPECTRA4
+    % "original" sampling rate from t0 grid
+    fs0 = 1/mean(diff(t0));
+
+    [f0,  X0mag] = get_spectrum_mag(x0, fs0, Nfft_spec, use_window_for_spec);
+    [f1ax,X1mag] = get_spectrum_mag(x1, fs1, Nfft_spec, use_window_for_spec);
+    [f2ax,X2mag] = get_spectrum_mag(x2, fs2, Nfft_spec, use_window_for_spec);
+    [fNax,XNmag] = get_spectrum_mag(xN, fN,  Nfft_spec, use_window_for_spec);
+
+    figure('Color','w','Name','Spectra (Original / fs1 / fs2 / fN)');
+    tiledlayout(2,2,'TileSpacing','compact','Padding','compact');
+
+    nexttile;
+    plot(f0, X0mag, 'LineWidth', 1.2); grid on;
+    xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('(a) original spectrum'); xlim([-f_lim, f_lim]);
+
+    nexttile;
+    plot(f1ax, X1mag, 'LineWidth', 1.2); grid on;
+    xlabel('f (Hz)'); ylabel('|X(f)|');
+    title(sprintf('(b) spectrum @ f_{s1}=%.2f Hz', fs1)); xlim([-f_lim, f_lim]);
+
+    nexttile;
+    plot(f2ax, X2mag, 'LineWidth', 1.2); grid on;
+    xlabel('f (Hz)'); ylabel('|X(f)|');
+    title(sprintf('(c) spectrum @ f_{s2}=%.2f Hz', fs2)); xlim([-f_lim, f_lim]);
+
+    nexttile;
+    plot(fNax, XNmag, 'LineWidth', 1.2); grid on;
+    xlabel('f (Hz)'); ylabel('|X(f)|');
+    title(sprintf('(d) spectrum @ f_N=%.2f Hz', fN)); xlim([-f_lim, f_lim]);
+end
+
+%% ===================== Step 2: Align spectra to common f-axis + LPF =====================
+% Common axis in [-fH, fH]
+f_common = linspace(-fH, fH, K_common).';
+
+[X1, f1_axis] = get_spectrum_complex_CT(x1, fs1, Nfft_align, use_window_align, t1(1));
+[X2, f2_axis] = get_spectrum_complex_CT(x2, fs2, Nfft_align, use_window_align, t2(1));
+
+% Interpolate onto the same axis
+X1_c = interp1(f1_axis(:), X1(:), f_common, 'linear', 0);
+X2_c = interp1(f2_axis(:), X2(:), f_common, 'linear', 0);
+
+% Ideal LPF within |f|<=fH (rect mask)
+LPF    = double(abs(f_common) <= fH);
+X1_LPF = X1_c .* LPF;
+X2_LPF = X2_c .* LPF;
+
+if PLOT_STEP2
+    figure('Color','w','Name','Aligned & LPF spectra (NO de-aliasing)');
+    plot(f_common, abs(X1_LPF), 'LineWidth', 1.2, 'DisplayName','X_1 (fs1) after LPF'); hold on;
+    plot(f_common, abs(X2_LPF), 'LineWidth', 1.2, 'DisplayName','X_2 (fs2) after LPF');
+    grid on; xlabel('f (Hz)'); ylabel('|X(f)| (CTFT-scaled)');
+    title('Aligned spectra on common axis within [-f_H, f_H] (LPF applied)');
+    xline(+fH,'--','HandleVisibility','off');
+    xline(-fH,'--','HandleVisibility','off');
+    legend('show','Location','northeast');
+end
+
+%% ===================== Step 3: Divide [0, fH] into sections (visual only) =====================
+edges = linspace(0, fH, n+1);
+
+if PLOT_STEP3
+    figure('Color','w','Name','Positive-frequency sections (visualization only)');
+    plot(f_common, abs(X1_LPF), 'LineWidth', 1.2, 'DisplayName','X_1 (fs1)'); hold on;
+    plot(f_common, abs(X2_LPF), 'LineWidth', 1.2, 'DisplayName','X_2 (fs2)');
+    grid on; xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('Positive-frequency sections (visualization only)');
+    xlim([0 fH]);
+
+    yl = ylim;
+    % boundaries (no legend)
+    for k = 2:numel(edges)-1
+        xline(edges(k), '--k', 'LineWidth', 1, 'HandleVisibility','off');
+    end
+
+    % shading (no legend)
+    colors = [0.8 0.9 1.0; 1.0 0.9 0.9; 0.9 1.0 0.9; 1.0 1.0 0.9];
+    for i = 1:n
+        ci = colors(1+mod(i-1,size(colors,1)),:);
+        patch([edges(i) edges(i+1) edges(i+1) edges(i)], ...
+              [yl(1) yl(1) yl(2) yl(2)], ...
+              ci, 'FaceAlpha', 0.12, 'EdgeColor','none', 'HandleVisibility','off');
+    end
+
+    legend('show','Location','northeast');
+end
+
+%% ===================== Step 4 (general n): iterative alias extraction + shifting + update =====================
+opts4 = struct('doPlots', PLOT_STEP4_ITER, 'figPrefix', 'Step4');
+out4  = dualrate_dealias_step4_general(f_common, X1_LPF, X2_LPF, fH, n, opts4);
+X1_eff = out4.X1_eff;
+
+% --- summary plots (keep your original 3-step visual style) ---
+idx_pos = find(f_common >= 0 & f_common <= fH);
+
+if PLOT_STEP4A
+    % Show section-1 (first section) extraction (matches your previous Fig-5)
+    edges4 = out4.edges;
+    idx_sec1 = find(f_common >= edges4(1) & f_common <= edges4(2));
+    X1_sec1 = X1_LPF(idx_sec1);
+    X2_sec1 = X2_LPF(idx_sec1);
+    X_alias_1 = out4.alias_each{1};
+
+    figure('Color','w','Name','Section 1 alias extraction (NO shifting yet)');
+    plot(f_common(idx_sec1), abs(X1_sec1), 'LineWidth',1.2, 'DisplayName','X_1 (clean)'); hold on;
+    plot(f_common(idx_sec1), abs(X2_sec1), 'LineWidth',1.2, 'DisplayName','X_2 (mixed)');
+    plot(f_common(idx_sec1), abs(X_alias_1), '--', 'LineWidth',1.5, 'DisplayName','X_{alias}^{(1)}');
+    grid on; xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('Section 1: alias extraction (NO shifting yet)');
+    xlim([edges4(1) edges4(2)]);
+    legend('show','Location','northwest');
+end
+
+if PLOT_STEP4B
+    % Show first shift (section1 -> section2) (matches your previous Fig-6)
+    edges4 = out4.edges;
+    idx_sec1 = find(f_common >= edges4(1) & f_common <= edges4(2));
+    X_alias_1 = out4.alias_each{1};
+    X_alias_1_shifted = out4.shifted_each{1};
+
+    figure('Color','w','Name','Alias shifting (section 1 to section 2)');
+
+    subplot(2,1,1);
+    plot(f_common(idx_sec1), abs(X_alias_1), 'LineWidth',1.5, 'DisplayName','alias (before)');
+    grid on; xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('Alias extracted in section 1 (before shift)');
+    xlim([0 fH]);
+    xline(edges4(2),'--k','LineWidth',1,'HandleVisibility','off');
+    legend('show');
+
+    subplot(2,1,2);
+    plot(f_common, abs(X_alias_1_shifted), 'LineWidth',1.5, 'DisplayName','alias (after)');
+    grid on; xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('Alias after shifting to section 2 (should lie in section 2)');
+    xlim([0 fH]);
+    xline(edges4(2),'--k','LineWidth',1,'HandleVisibility','off');
+    legend('show');
+end
+
+% Step 4 consistency check for section 1 (complex): X2 ≈ X1 + alias
+edges4 = out4.edges;
+idx_sec1 = find(f_common >= edges4(1) & f_common <= edges4(2));
+X1_sec1 = X1_LPF(idx_sec1);
+X2_sec1 = X2_LPF(idx_sec1);
+X_alias_1 = out4.alias_each{1};
+err = norm((X1_sec1 + X_alias_1) - X2_sec1) / max(norm(X2_sec1), eps);
+fprintf('Step 4 check (section 1): relative reconstruction error = %.3e\n', err);
+
+if PLOT_STEP4C
+    figure('Color','w','Name','Update X1 (after Step 4 general-n)');
+    plot(f_common(idx_pos), abs(X1_LPF(idx_pos)), 'LineWidth',1.2, 'DisplayName','X_1 before (LPF)'); hold on;
+    plot(f_common(idx_pos), abs(X1_eff(idx_pos)), 'LineWidth',1.5, 'DisplayName','X_1 after update (X1\_eff)');
+    plot(f_common(idx_pos), abs(X2_LPF(idx_pos)), '--', 'LineWidth',1.2, 'DisplayName','X_2 (LPF)');
+    grid on; xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('Positive band [0, f_H]: before vs after Step 4 update');
+    xlim([0 fH]);
+    for k = 2:numel(edges4)-1
+        xline(edges4(k),'--k','LineWidth',1,'HandleVisibility','off');
+    end
+    legend('show','Location','northwest');
+end
+
+if PLOT_STEP4C_Z
+    % Zoom last section for a "cleaning" look
+    idx_last = find(f_common >= edges4(end-1) & f_common <= edges4(end));
+    figure('Color','w','Name','Last section zoom (after Step 4 update)');
+    plot(f_common(idx_last), abs(X1_LPF(idx_last)), 'LineWidth',1.2, 'DisplayName','X_1 before'); hold on;
+    plot(f_common(idx_last), abs(out4.X_alias_shifted_all(idx_last)), '--', 'LineWidth',1.2, 'DisplayName','(sum) shifted alias');
+    plot(f_common(idx_last), abs(X1_eff(idx_last)), 'LineWidth',1.5, 'DisplayName','X_1 after');
+    grid on; xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('Last section: X1 before, shifted alias (sum), X1 after');
+    xlim([edges4(end-1) edges4(end)]);
+    legend('show','Location','northwest');
+end
+
+%% ===================== Step 5-7 (FIXED): spectrum reconstruction + inverse =====================
+
+% ---------- Step 5: build physically-consistent spectrum ----------
+% Use ONLY positive frequencies, then enforce symmetry by construction
+df = f_common(2) - f_common(1);
+
+% positive-frequency indices (including DC)
+idx_pos = find(f_common >= 0 & f_common <= fH);
+f_pos   = f_common(idx_pos);
+X_pos   = X1_eff(idx_pos);
+
+% build full frequency grid manually
+f_full = [-flipud(f_pos(2:end)); f_pos];
+X_full = [conj(flipud(X_pos(2:end))); X_pos];
+
+% ---------- Step 6: inverse CTFT ----------
+t_rec = linspace(-T, T, 4000).';
+E = exp(1j * 2*pi * (t_rec * f_full.'));
+x_rec = real(E * (X_full * df));
+
+% ---------- Step 7: compare with original ----------
+x0_cmp = interp1(t0(:), x0(:), t_rec, 'pchip', 0);
+R = corr(x0_cmp, x_rec);
+fprintf('Step 7 (FIXED): correlation R = %.6f\n', R);
+
+%% ---------- Plots ----------
+if PLOT_RECON_TIME
+    figure('Color','w','Name','De-aliased time-domain comparison (FIXED)');
+    plot(t0, x0, 'k', 'LineWidth',1.2, 'DisplayName','original'); hold on;
+    plot(t_rec, x_rec, '--r', 'LineWidth',1.6, 'DisplayName','de-aliased (fixed)');
+    grid on;
+    xlabel('t'); ylabel('x(t)');
+    title(sprintf('Time-domain comparison (R = %.4f)', R));
+    xlim(xlim_time); ylim(ylim_time);
+    legend('show','Location','northeast');
+end
+
+if PLOT_RECON_SPEC
+    figure('Color','w','Name','Spectrum overlay (FIXED reconstruction)');
+    plot(f_common, abs(X1_LPF), 'LineWidth',1.2, 'DisplayName','|X_1| after LPF'); hold on;
+    plot(f_common, abs(X2_LPF), 'LineWidth',1.2, 'DisplayName','|X_2| after LPF');
+    plot(f_full, abs(X_full), '--', 'LineWidth',1.6, 'DisplayName','|X_{rec}| (fixed)');
+    grid on;
+    xlabel('f (Hz)'); ylabel('|X(f)|');
+    title('Spectrum overlay (physically reconstructed)');
+    xlim([-fH fH]);
+    legend('show','Location','northeast');
+end
+
+
+%% ===================== Local helper functions =====================
+function plot_smooth(t, x, titleStr, N_fine, show_samples, xlim_use, ylim_use)
+    [t_fine, x_fine] = smooth_curve(t, x, N_fine);
+    plot(t_fine, x_fine, 'LineWidth', 1.2); hold on;
+    if show_samples
+        plot(t, x, 'o', 'MarkerSize', 3);
+    end
+    grid on;
+    xlabel('t'); ylabel('x(t)');
+    title(titleStr);
+    xlim(xlim_use); ylim(ylim_use);
+end
+
+function [t_fine, x_fine] = smooth_curve(t, x, N_fine)
+    t = t(:); x = x(:);
+    t_fine = linspace(min(t), max(t), N_fine).';
+    x_fine = interp1(t, x, t_fine, 'pchip');
+end
+
+function [faxis, Xmag] = get_spectrum_mag(x, fs, Nfft, use_window)
+    x = x(:);
+    Ts = 1/fs;
+    if use_window
+        w = hann(length(x));
+        x = x .* w;
+    end
+    X = fftshift(fft(x, Nfft)) * Ts;     % CTFT-like scaling
+    faxis = (-Nfft/2 : Nfft/2-1) * (fs/Nfft);
+    Xmag = abs(X);
+end
+
+function [X, faxis] = get_spectrum_complex_CT(x, fs, Nfft, use_window, t_start)
+    x = x(:);
+    Ts = 1/fs;
+
+    if use_window
+        w  = hann(length(x));
+        cg = mean(w);           % coherent-gain compensation (amplitude)
+        x  = x .* w;
+    else
+        cg = 1;
+    end
+
+    X = fftshift(fft(x, Nfft)) * Ts / cg;
+
+    faxis = (-Nfft/2 : Nfft/2-1).' * (fs/Nfft);   % column (Nfft×1)
+    X     = X(:);                                  % column (Nfft×1)
+
+    X = X .* exp(-1j*2*pi * faxis * t_start);      % element-wise (Nfft×1)
+
+end
+
+function out = dualrate_dealias_step4_general(f_common, X1_LPF, X2_LPF, fH, n, opts)
+% dualrate_dealias_step4_general
+% Generalized Step 4 for arbitrary n (n>=2) on positive frequency band [0, fH].
+%
+% Inputs:
+%   f_common : column vector, uniform grid spanning at least [-fH, fH]
+%   X1_LPF   : complex spectrum (aligned+LPF) from fs1 on f_common
+%   X2_LPF   : complex spectrum (aligned+LPF) from fs2 on f_common
+%   fH       : highest frequency bound
+%   n        : number of sections in [0,fH]
+%   opts.doPlots  : per-iteration debug plots (default false)
+%   opts.figPrefix: figure name prefix
+%
+% Output struct out:
+%   .X1_eff              : updated effective spectrum after (n-1) iterations
+%   .X_alias_shifted_all : accumulated shifted alias (same size as f_common)
+%   .alias_each          : cell{n-1}, alias in section i (before shift)
+%   .shifted_each        : cell{n-1}, full-length shifted alias placed into section i+1
+%   .edges               : section edges (0..fH)
+%   .df, .w              : frequency resolution and section width (Hz)
+%   .shift_method        : how alias was shifted ("interp")
+
+    if nargin < 6 || isempty(opts), opts = struct(); end
+    if ~isfield(opts,'doPlots'), opts.doPlots = false; end
+    if ~isfield(opts,'figPrefix'), opts.figPrefix = 'Step4'; end
+
+    % sanity: uniform grid
+    df = f_common(2) - f_common(1);
+    if any(abs(diff(f_common) - df) > 1e-12)
+        error('f_common must be a uniform grid.');
+    end
+    if n < 2
+        error('n must be >= 2');
+    end
+
+    w = fH / n;                % section width (Hz)
+
+    edges = linspace(0, fH, n+1);
+    idx_pos = find(f_common >= 0 & f_common <= fH);
+
+    X1_eff = X1_LPF;
+    X_alias_shifted_all = zeros(size(X1_LPF));
+    alias_each = cell(n-1,1);
+    shifted_each = cell(n-1,1);
+
+    % Use left-closed, right-open sections to avoid double-counting boundary bins.
+    % (Last section is not explicitly iterated here.)
+    for i = 1:(n-1)
+        fL = edges(i);
+        fR = edges(i+1);
+        if i < (n-1)
+            idx_i = find(f_common >= fL & f_common <  fR);
+        else
+            % For the final iterated section, include the right edge so we don't drop a bin.
+            idx_i = find(f_common >= fL & f_common <= fR);
+        end
+
+        % 1) extract alias in section i
+        X_alias_i = X2_LPF(idx_i) - X1_eff(idx_i);
+        alias_each{i} = X_alias_i;
+
+        % 2) shift alias by +w (Hz) to section i+1
+        % IMPORTANT: do NOT shift by integer bins (round(w/df)) because when w/df
+        % is not an integer (common when fH changes), the rounding error accumulates
+        % across iterations and corrupts phase-sensitive reconstruction.
+        %
+        % We instead shift by frequency using interpolation:
+        %   X_shift(f) = X_alias(f - w)
+        X_alias_full = zeros(size(X1_LPF));
+        X_alias_full(idx_i) = X_alias_i;
+        X_shift_full = interp1(f_common, X_alias_full, f_common - w, 'linear', 0);
+        shifted_each{i} = X_shift_full;
+
+        % 3) update effective spectrum
+        X1_eff = X1_eff - X_shift_full;
+        X_alias_shifted_all = X_alias_shifted_all + X_shift_full;
+
+        % Optional per-iteration plots
+        if opts.doPlots
+            figure('Color','w','Name',sprintf('%s Iter %d', opts.figPrefix, i));
+            tiledlayout(3,1,'TileSpacing','compact','Padding','compact');
+
+            nexttile;
+            plot(f_common(idx_i), abs(X1_LPF(idx_i)), 'LineWidth',1.1, 'DisplayName','X1 before'); hold on;
+            plot(f_common(idx_i), abs(X2_LPF(idx_i)), 'LineWidth',1.1, 'DisplayName','X2');
+            plot(f_common(idx_i), abs(X_alias_i), '--', 'LineWidth',1.4, 'DisplayName','alias');
+            grid on; xlim([fL fR]);
+            xlabel('f (Hz)'); ylabel('|X(f)|');
+            title(sprintf('Section %d extraction', i));
+            legend('show');
+
+            nexttile;
+            plot(f_common(idx_pos), abs(X_shift_full(idx_pos)), 'LineWidth',1.3);
+            grid on; xlim([0 fH]);
+            xlabel('f (Hz)'); ylabel('|X(f)|');
+            title(sprintf('Shifted alias to section %d', i+1));
+            xline(edges(i+1),'--k','HandleVisibility','off');
+            xline(edges(i+2),'--k','HandleVisibility','off');
+
+            nexttile;
+            plot(f_common(idx_pos), abs(X1_eff(idx_pos)), 'LineWidth',1.3);
+            grid on; xlim([0 fH]);
+            xlabel('f (Hz)'); ylabel('|X(f)|');
+            title('X1\_eff after update');
+            for k = 2:numel(edges)-1
+                xline(edges(k),'--k','HandleVisibility','off');
+            end
+        end
+    end
+
+    out = struct();
+    out.X1_eff = X1_eff;
+    out.X_alias_shifted_all = X_alias_shifted_all;
+    out.alias_each = alias_each;
+    out.shifted_each = shifted_each;
+    out.edges = edges;
+    out.df = df;
+    out.w = w;
+    out.shift_method = "interp";
+end
+
+function Xsym = enforce_conjugate_symmetry_on_grid(f_common, X)
+% Ensure X(-f) = conj(X(+f)) on a symmetric uniform grid to yield real x(t).
+    Xsym = X;
+    K = numel(f_common);
+    idx_neg = find(f_common < 0);
+    for ii = 1:numel(idx_neg)
+        in = idx_neg(ii);
+        ip = K + 1 - in; % mirror index for symmetric grids
+        if ip >= 1 && ip <= K && f_common(ip) > 0
+            Xsym(in) = conj(Xsym(ip));
+        end
+    end
+    % DC bin stays as-is.
+end
+
+function [t_rec, x_rec] = inverse_ctft_on_grid(f_common, X, t_rec)
+% Inverse CTFT approximation on uniform f-grid:
+%   x(t) ≈ sum_k X(f_k) exp(j2π f_k t) df
+    df = f_common(2) - f_common(1);
+    f = f_common(:).';
+    t = t_rec(:);
+    E = exp(1j * 2*pi * (t * f));
+    x = (E * (X(:) * df));
+    x_rec = real(x);
+end
